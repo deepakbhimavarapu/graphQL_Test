@@ -1,0 +1,94 @@
+type Duration {
+  start: String
+  end: String
+  time_elapsed: Float
+  remaining_time: String
+}
+
+type Module {
+  module_id: String
+  module_name: String
+  cohort_schedule_id: String
+  start_date: String
+  end_date: String
+  module_total_points: Int
+  issue_badges: Boolean
+  badge_percentage: Float
+  allowed_quiz_attempts: Int
+  sla_ita_attendance_points: Int
+  badge_bonus_points: Int
+}
+
+type Course {
+  course_id: String
+  course_name: String
+  start_date: String
+  end_date: String
+  course_total_points: Int
+  issue_badges: Boolean
+  badge_percentage: Float
+  allowed_quiz_attempts: Int
+  badge_bonus_points: Int
+  sla_ita_attendance_points: Int
+  cohort_schedule_id: String
+  modules: [Module]
+}
+
+type Pacing {
+  ahead: Int
+  on_track: Int
+  behind: Int
+}
+
+type Learners {
+  total: Int
+  active: Int
+  pacing: Pacing
+}
+
+type LaggingCourse {
+  user: String
+  count: Int
+}
+
+type CompletedCourse {
+  course_id: String
+  course_name: String
+}
+
+type Program {
+  id: String
+  name: String
+  pm_email: String
+  program_manager: String
+  status: String
+  last_updated: String
+  available_platform: String
+  total_course_certificates: Int
+  duration: Duration
+  category: String
+  cohort: String
+  total_points: Int
+  certificate_pass_percentage: Float
+  badge_percentage: Float
+  distinction_percentage: Float
+  allowed_quiz_attempts: Int
+  badge_bonus_points: Int
+  is_valid: Boolean
+  courses: [Course]
+  learners: Learners
+  is_alive: Int
+  is_alive_list: [String]
+  access_blocked: Int
+  access_blocked_list: [String]
+  laggards_count: Int
+  lagging_courses_list: [LaggingCourse]
+  completed_course_count: Int
+  completed_courses_list: [CompletedCourse]
+  progress: Float
+  engagement: Float
+}
+
+type Query {
+  programs: [Program]
+}
