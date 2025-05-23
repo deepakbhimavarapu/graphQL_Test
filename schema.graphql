@@ -5,32 +5,66 @@ type Duration {
   remaining_time: String
 }
 
-type Module {
-  id: String!
-  name: String!
-  engagement: Float!
-  progress: Float!
-  performance: Float!
-  badge: Boolean!
-  bonus_points: Int!
-  time_spent: String!
-  achieved_points: Int!
-  total_points: Int!
-  start_date: String!
+# Types for Program Performance Analytics
+type ProgramModule {
+  module_id: String
+  module_name: String
+  cohort_schedule_id: String
+  start_date: String
+  end_date: String
+  module_total_points: Int
+  issue_badges: Boolean
+  badge_percentage: Float
+  allowed_quiz_attempts: Int
+  sla_ita_attendance_points: Int
+  badge_bonus_points: Int
 }
 
-type Course {
-  id: String!
-  name: String!
-  progress: Float!
-  engagement: Float!
-  performance: Float!
-  certificate_earned: Boolean!
-  time_spent: String!
-  achieved_points: Int!
-  total_points: Int!
-  start_date: String!
-  modules: [Module!]!
+type ProgramCourse {
+  course_id: String
+  course_name: String
+  start_date: String
+  end_date: String
+  course_total_points: Int
+  issue_badges: Boolean
+  badge_percentage: Float
+  allowed_quiz_attempts: Int
+  badge_bonus_points: Int
+  sla_ita_attendance_points: Int
+  cohort_schedule_id: String
+  certificate_pass_percentage: Float
+  modules: [ProgramModule!]
+}
+
+# Types for Learner Progress
+type LearnerModule {
+  id: String
+  name: String
+  engagement: Float
+  progress: Float
+  performance: Float
+  badge: Boolean
+  bonus_points: Int
+  time_spent: String
+  achieved_points: Int
+  total_points: Int
+  start_date: String
+}
+
+type LearnerCourse {
+  id: String
+  name: String
+  progress: Float
+  engagement: Float
+  performance: Float
+  certificate_earned: Boolean
+  time_spent: String
+  achieved_points: Int
+  total_points: Int
+  total_badges: Int
+  certificate_pass_percentage: Float
+  start_date: String
+  modules: [LearnerModule!]
 }
 
 type Pacing {
@@ -55,6 +89,24 @@ type CompletedCourse {
   course_name: String
 }
 
+# Types for Program Performance Analytics
+type OngoingCourseProgress {
+  course_name: String
+  course_order_id: Int
+  module_order_id: Int
+  module_name: String
+  first_name: String
+  is_badge_earned_module: Boolean
+}
+
+# Types for Program Performance Analytics
+type ProgrammeUserCertStatus {
+  course_order_id: Int
+  course_name: String
+  first_name: String
+  is_certificate_earned_course: Boolean
+}
+
 type Program {
   id: String
   name: String
@@ -74,7 +126,7 @@ type Program {
   allowed_quiz_attempts: Int
   badge_bonus_points: Int
   is_valid: Boolean
-  courses: [Course]
+  courses: [ProgramCourse!]
   learners: Learners
   is_alive: Int
   is_alive_list: [String]
@@ -86,38 +138,43 @@ type Program {
   completed_courses_list: [CompletedCourse]
   progress: Float
   engagement: Float
+  ongoing_course_progress: [OngoingCourseProgress!]
+  programme_user_cert_status_list: [ProgrammeUserCertStatus!]
 }
 
 type Certificates {
-    completion: Int!
-    distinction: Int!
+  completion: Int!
+  distinction: Int!
 }
 
 type Learner {
-    id: String!
-    name: String!
-    email: String!
-    status: String!
-    progress: Float!
-    engagement: Float!
-    performance: Float!
-    time_spent: String!
-    achieved_points: Int!
-    badges: Int!
-    total_points: Int!
-    certificates: Certificates!
-    courses: [Course!]!
+  id: String!
+  name: String!
+  email: String!
+  status: String!
+  progress: Float!
+  engagement: Float!
+  performance: Float!
+  time_spent: String!
+  achieved_points: Int!
+  badges: Int!
+  total_points: Int!
+  certificates: Certificates!
+  courses: [LearnerCourse!]!
+  course_certificates_earned: Int!
+  last_active: String
 }
 
 type LearnerProgress {
-    id: String!
-    name: String!
-    status: String!
-    completion_certificates: Int!
-    distinction_certificates: Int!
-    performance: Float!
-    total_course_certificates: Int!
-    learner_data: [Learner!]!
+  id: String!
+  name: String!
+  status: String!
+  completion_certificates: Int!
+  distinction_certificates: Int!
+  performance: Float!
+  total_course_certificates: Int!
+  total_badges: Int!
+  learner_data: [Learner!]!
 }
 
 type Query {

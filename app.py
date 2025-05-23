@@ -32,6 +32,15 @@ load_dotenv()
 # Initialize Flask
 app = Flask(__name__)
 
+def format_time_spent(seconds):
+    """Convert seconds to HH:MM:SS format"""
+    if not seconds:
+        return "00:00:00"
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
 # Load GraphQL schema
 type_defs = gql(load_schema_from_path("schema.graphql"))
 query = QueryType()
@@ -60,38 +69,114 @@ def run_async(coro):
         asyncio.set_event_loop(loop)
     return loop.run_until_complete(coro)
 
-async def process_module(module):
+async def process_module(module, is_program_analytics=False):
     """Process a single module asynchronously"""
     module_dict = dict(module.items())
-    # Format module dates
-    if module_dict.get('module_offering_start_timestamp'):
-        module_dict['start_date'] = format_date(module_dict.pop('module_offering_start_timestamp'))
-    if module_dict.get('module_offering_end_timestamp'):
-        module_dict['end_date'] = format_date(module_dict.pop('module_offering_end_timestamp'))
-    return module_dict
+    
+    if is_program_analytics:
+        # Format for Program Performance Analytics (ProgramModule type)
+        if module_dict.get('module_offering_start_timestamp'):
+            module_dict['start_date'] = format_date(module_dict.pop('module_offering_start_timestamp'))
+        if module_dict.get('module_offering_end_timestamp'):
+            module_dict['end_date'] = format_date(module_dict.pop('module_offering_end_timestamp'))
+        
+        # Map fields to match ProgramModule type
+        return {
+            'module_id': module_dict.get('module_id'),
+            'module_name': module_dict.get('module_name'),
+            'cohort_schedule_id': module_dict.get('cohort_schedule_id'),
+            'start_date': module_dict.get('start_date'),
+            'end_date': module_dict.get('end_date'),
+            'module_total_points': module_dict.get('module_total_points_defined', 0),
+            'issue_badges': module_dict.get('module_issue_badges_flag', False),
+            'badge_percentage': module_dict.get('module_badge_percentage', 0.0),
+            'allowed_quiz_attempts': module_dict.get('module_allowed_quiz_attempts', 0),
+            'sla_ita_attendance_points': module_dict.get('module_sla_ita_attendance_points', 0),
+            'badge_bonus_points': module_dict.get('module_badge_bonus_points', 0)
+        }
+    else:
+        # Format for Learner Progress (LearnerModule type)
+        if module_dict.get('module_offering_start_timestamp'):
+            module_dict['start_date'] = format_date(module_dict.pop('module_offering_start_timestamp'))
+        
+        return {
+            'id': module_dict.get('module_id'),
+            'name': module_dict.get('module_name'),
+            'engagement': module_dict.get('engagement'),
+            'progress': module_dict.get('progress'),
+            'performance': module_dict.get('performance'),
+            'badge': module_dict.get('badge'),
+            'badge_bonus_points': module_dict.get('bonus_points'),
+            'time_spent': format_time_spent(module_dict.get('time_spent_seconds_module', 0)),
+            'achieved_points': module_dict.get('achieved_points'),
+            'total_points': module_dict.get('module_total_points_defined'),
+            'start_date': module_dict.get('start_date')
+        }
 
-async def process_course(course):
+async def process_course(course, is_program_analytics=False):
     """Process a single course and its modules asynchronously"""
     course_dict = dict(course.items())
     
-    # Format course dates
-    if course_dict.get('course_offering_start_timestamp'):
-        course_dict['start_date'] = format_date(course_dict.pop('course_offering_start_timestamp'))
-    if course_dict.get('course_offering_end_timestamp'):
-        course_dict['end_date'] = format_date(course_dict.pop('course_offering_end_timestamp'))
-    
-    # Process modules in parallel
-    modules = course_dict.get('modules', [])
-    if modules:
-        # Create tasks for all modules
-        module_tasks = [process_module(module) for module in modules]
-        # Wait for all module processing to complete
-        processed_modules = await asyncio.gather(*module_tasks)
-        course_dict['modules'] = processed_modules
+    if is_program_analytics:
+        # Format for Program Performance Analytics (ProgramCourse type)
+        if course_dict.get('course_offering_start_timestamp'):
+            course_dict['start_date'] = format_date(course_dict.pop('course_offering_start_timestamp'))
+        if course_dict.get('course_offering_end_timestamp'):
+            course_dict['end_date'] = format_date(course_dict.pop('course_offering_end_timestamp'))
+        
+        # Process modules in parallel
+        modules = course_dict.get('modules', [])
+        if modules:
+            module_tasks = [process_module(module, is_program_analytics=True) for module in modules]
+            processed_modules = await asyncio.gather(*module_tasks)
+        else:
+            processed_modules = []
+        
+        # Map fields to match ProgramCourse type using exact field names from SQL query
+        return {
+            'course_id': course_dict.get('course_id'),
+            'course_name': course_dict.get('course_name'),
+            'start_date': course_dict.get('start_date'),
+            'end_date': course_dict.get('end_date'),
+            'course_total_points': course_dict.get('course_total_points', 0),
+            'issue_badges': course_dict.get('issue_badges', False),
+            'badge_percentage': course_dict.get('badge_percentage', 0.0),
+            'allowed_quiz_attempts': course_dict.get('allowed_quiz_attempts', 0),
+            'badge_bonus_points': course_dict.get('badge_bonus_points', 0),
+            'sla_ita_attendance_points': course_dict.get('sla_ita_attendance_points', 0),
+            'cohort_schedule_id': course_dict.get('cohort_schedule_id'),
+            'certificate_pass_percentage': course_dict.get('certificate_pass_percentage', 0.0),
+            'modules': processed_modules
+        }
     else:
-        course_dict['modules'] = []
-    
-    return course_dict
+        # Format for Learner Progress (LearnerCourse type)
+        if course_dict.get('course_offering_start_timestamp'):
+            course_dict['start_date'] = format_date(course_dict.pop('course_offering_start_timestamp'))
+        
+        # Process modules in parallel
+        modules = course_dict.get('modules', [])
+        if modules:
+            module_tasks = [process_module(module, is_program_analytics=False) for module in modules]
+            processed_modules = await asyncio.gather(*module_tasks)
+        else:
+            processed_modules = []
+        
+        # Map fields to match LearnerCourse type
+        return {
+            'id': course_dict.get('course_id'),
+            'name': course_dict.get('course_name'),
+            'progress': course_dict.get('progress'),
+            'engagement': course_dict.get('engagement'),
+            'performance': course_dict.get('performance'),
+            'certificate_earned': course_dict.get('certificate_earned'),
+            'time_spent': format_time_spent(course_dict.get('time_spent_seconds_course', 0)),
+            'achieved_points': course_dict.get('achieved_points'),
+            'total_points': course_dict.get('course_total_points_defined'),
+            'total_badges': course_dict.get('total_badges'),
+            'certificate_pass_percentage': course_dict.get('certificate_pass_percentage'),
+            'start_date': course_dict.get('start_date'),
+            'modules': processed_modules
+        }
 
 async def process_program(program_dict):
     """Process a single program, its courses, and modules asynchronously"""
@@ -110,7 +195,7 @@ async def process_program(program_dict):
     courses = program_dict.get('courses', [])
     if courses:
         # Create tasks for all courses
-        course_tasks = [process_course(course) for course in courses]
+        course_tasks = [process_course(course, is_program_analytics=True) for course in courses]
         # Wait for all course processing to complete
         processed_courses = await asyncio.gather(*course_tasks)
         program_dict['courses'] = processed_courses
@@ -145,7 +230,6 @@ def get_cached_programs():
     if (program_cache['data'] is not None and 
         program_cache['timestamp'] is not None and 
         current_time - program_cache['timestamp'] < CACHE_DURATION):
-        logger.info("Returning cached program data")
         return program_cache['data']
     return None
 
@@ -153,19 +237,15 @@ def set_cached_programs(data):
     """Cache program data with current timestamp"""
     program_cache['data'] = data
     program_cache['timestamp'] = time.time()
-    logger.info("Updated program cache")
 
 def format_date(date_str):
     """Convert BigQuery timestamp to DD MMM, YYYY format"""
     if not date_str:
-        logger.info(f"Empty date string received")
         return None
     try:
         # Parse the timestamp using dateutil parser which handles various formats
-        logger.info(f"Attempting to parse date: {date_str}")
         date = parser.parse(date_str)
         formatted_date = date.strftime("%d %b, %Y")
-        logger.info(f"Formatted date: {formatted_date}")
         return formatted_date
     except (ValueError, TypeError) as e:
         logger.error(f"Error parsing date {date_str}: {str(e)}")
@@ -184,9 +264,7 @@ def format_duration(weeks, days):
 
 def calculate_duration(start_date, end_date):
     """Calculate duration metrics"""
-    logger.info(f"Calculating duration for start: {start_date}, end: {end_date}")
     if not start_date or not end_date:
-        logger.info("Missing start or end date")
         return None
         
     try:
@@ -194,8 +272,6 @@ def calculate_duration(start_date, end_date):
         start = parser.parse(start_date)
         end = parser.parse(end_date)
         now = datetime.now(UTC)  # Make current time timezone-aware
-        
-        logger.info(f"Parsed dates - start: {start}, end: {end}, now: {now}")
         
         # Calculate total duration
         total_duration = end - start
@@ -228,7 +304,6 @@ def calculate_duration(start_date, end_date):
             "time_elapsed": elapsed,
             "remaining_time": f"{remaining_str} of total {total_str}"
         }
-        logger.info(f"Calculated duration result: {result}")
         return result
     except (ValueError, TypeError) as e:
         logger.error(f"Error calculating duration: {str(e)}")
@@ -268,6 +343,42 @@ def resolve_programs(_, info):
             ON
                 mo.module_id = m.module_id
         ),
+        OngoingCourseProgress AS (
+            SELECT DISTINCT
+                dc.course_name,
+                dco.course_order_id,
+                dmo.module_order_id,
+                dm.module_name,
+                du.first_name,
+                fmps.is_badge_earned_module,
+                dco.programme_id_fk
+            FROM
+                `{project_id}.{dataset}.DimCourseOffering` AS dco
+            INNER JOIN
+                `{project_id}.{dataset}.DimCourse` AS dc
+            ON
+                dco.course_id = dc.course_id
+            INNER JOIN
+                `{project_id}.{dataset}.FactModulePerformanceSnapshot` AS fmps
+            ON
+                dco.cohort_schedule_id = fmps.cohort_identifier_fk
+            INNER JOIN
+                `{project_id}.{dataset}.DimModuleOffering` AS dmo
+            ON
+                dco.cohort_schedule_id = dmo.cohort_schedule_id
+                AND fmps.module_id = dmo.module_id
+            INNER JOIN
+                `{project_id}.{dataset}.DimModule` AS dm
+            ON
+                fmps.module_id = dm.module_id
+            INNER JOIN
+                `{project_id}.{dataset}.DimUser` AS du
+            ON
+                fmps.user_id = du.user_id
+            WHERE
+                dco.course_offering_end_timestamp > CURRENT_TIMESTAMP()
+                AND dco.course_offering_start_timestamp <= CURRENT_TIMESTAMP()
+        ),
         CourseData AS (
             SELECT 
                 co.programme_id_fk,
@@ -283,6 +394,7 @@ def resolve_programs(_, info):
                 co.course_badge_bonus_points,
                 co.course_sla_ita_attendance_points,
                 co.cohort_schedule_id,
+                COALESCE(co.certificate_pass_percentage, 0.0) as certificate_pass_percentage,
                 ARRAY(
                     SELECT AS STRUCT
                         md.*
@@ -299,6 +411,8 @@ def resolve_programs(_, info):
                 `{project_id}.{dataset}.DimCourse` c
             ON
                 co.course_id = c.course_id
+            WHERE
+                co.programme_id_fk IS NOT NULL
         ),
         InactiveUsers AS (
             SELECT
@@ -404,6 +518,33 @@ def resolve_programs(_, info):
                 `{project_id}.{dataset}.FactProgrammePerformanceSnapshot`
             GROUP BY
                 programme_id
+        ),
+        ProgrammeUserCertStatus AS (
+            SELECT
+                t1.course_order_id,
+                DimCourse.course_name,
+                DimUser.first_name,
+                t0.is_certificate_earned_course,
+                t0.programme_id_fk
+            FROM
+                `{project_id}.{dataset}.FactCoursePerformanceSnapshot` AS t0
+            INNER JOIN
+                `{project_id}.{dataset}.DimCourse` AS DimCourse
+            ON
+                t0.course_id = DimCourse.course_id
+            INNER JOIN
+                `{project_id}.{dataset}.DimUser` AS DimUser
+            ON
+                t0.user_id = DimUser.user_id
+            INNER JOIN
+                `{project_id}.{dataset}.DimProgramme` AS DimProgramme
+            ON
+                t0.programme_id_fk = DimProgramme.programme_id
+            INNER JOIN
+                `{project_id}.{dataset}.DimCourseOffering` AS t1
+            ON
+                t0.programme_id_fk = t1.programme_id_fk
+                AND t0.course_id = t1.course_id
         )
         SELECT
             p.programme_id AS id,
@@ -438,6 +579,7 @@ def resolve_programs(_, info):
                     cd.course_badge_bonus_points AS badge_bonus_points,
                     cd.course_sla_ita_attendance_points AS sla_ita_attendance_points,
                     cd.cohort_schedule_id,
+                    cd.certificate_pass_percentage,
                     cd.modules
                 )
             ) AS courses,
@@ -459,7 +601,27 @@ def resolve_programs(_, info):
             COALESCE(ARRAY_LENGTH(cc.completed_courses), 0) as completed_course_count,
             COALESCE(cc.completed_courses, []) as completed_courses_list,
             COALESCE(pm.avg_progress, 0.0) as progress,
-            COALESCE(pm.avg_engagement, 0.0) as engagement
+            COALESCE(pm.avg_engagement, 0.0) as engagement,
+            ARRAY(
+                SELECT AS STRUCT
+                    ocp.course_name,
+                    ocp.course_order_id,
+                    ocp.module_order_id,
+                    ocp.module_name,
+                    ocp.first_name,
+                    ocp.is_badge_earned_module
+                FROM OngoingCourseProgress ocp
+                WHERE ocp.programme_id_fk = p.programme_id
+            ) as ongoing_course_progress,
+            ARRAY(
+                SELECT AS STRUCT
+                    pucs.course_order_id,
+                    pucs.course_name,
+                    pucs.first_name,
+                    pucs.is_certificate_earned_course
+                FROM ProgrammeUserCertStatus pucs
+                WHERE pucs.programme_id_fk = p.programme_id
+            ) as programme_user_cert_status_list
         FROM
             `{project_id}.{dataset}.DimProgramme` p
         LEFT JOIN
@@ -513,26 +675,23 @@ def resolve_programs(_, info):
             pm.avg_engagement
     """
     
-    logger.info("Executing BigQuery SQL")
     start_time = time.time()
     
-    # Execute query and process results using run_async
-    async def execute_and_process():
-        results = await execute_query(program_sql)
-        return await process_all_programs(results)
-    
-    programs = run_async(execute_and_process())
-    
-    query_time = time.time() - start_time
-    logger.info(f"Query execution time: {query_time:.2f} seconds")
-    
-    # Cache the processed data
-    set_cached_programs(programs)
-    
-    total_time = time.time() - start_time
-    logger.info(f"Total processing time: {total_time:.2f} seconds")
-    
-    return programs
+    try:
+        # Execute query and process results using run_async
+        async def execute_and_process():
+            results = await execute_query(program_sql)
+            return await process_all_programs(results)
+        
+        programs = run_async(execute_and_process())
+        
+        # Cache the processed data
+        set_cached_programs(programs)
+        
+        return programs
+    except Exception as e:
+        logger.error(f"Error in resolve_programs: {str(e)}")
+        raise GraphQLError(f"Error fetching program data: {str(e)}")
 
 def async_to_sync(func):
     """Convert an async function to sync function."""
@@ -560,12 +719,6 @@ def async_to_sync(func):
 async def resolve_learner_progress(_, info, programme_id: str) -> dict:
     """
     Resolver for fetching learner progress data for a specific programme.
-    Args:
-        _: Parent object (not used)
-        info: GraphQL resolver info
-        programme_id: The programme ID to fetch progress for
-    Raises:
-        GraphQLError: If no data is found for the given programme_id
     """
     project_id = os.getenv('BIGQUERY_PROJECT_ID')
     dataset = os.getenv('BIGQUERY_DATASET')
@@ -576,7 +729,12 @@ async def resolve_learner_progress(_, info, programme_id: str) -> dict:
             p.programme_id,
             p.programme_name,
             po.offering_status,
-            po.defined_total_course_certificates
+            po.defined_total_course_certificates,
+            (
+                SELECT COALESCE(SUM(total_badges), 0)
+                FROM `{project_id}.{dataset}.DimCourseOffering` dco
+                WHERE dco.programme_id_fk = p.programme_id
+            ) as total_badges
         FROM `{project_id}.{dataset}.DimProgramme` p
         LEFT JOIN `{project_id}.{dataset}.DimProgrammeOffering` po
             ON p.programme_id = po.programme_id
@@ -587,7 +745,7 @@ async def resolve_learner_progress(_, info, programme_id: str) -> dict:
             programme_id,
             COUNT(CASE WHEN completion_status = true THEN 1 END) as completion_certificates,
             COUNT(CASE WHEN distinction_status = true THEN 1 END) as distinction_certificates,
-            ROUND(AVG(performance_score_percentage), 2) as performance
+            ROUND(AVG(COALESCE(performance_score_percentage, 0)), 2) as performance
         FROM `{project_id}.{dataset}.FactProgrammePerformanceSnapshot`
         WHERE programme_id = @programme_id
         GROUP BY programme_id
@@ -598,21 +756,28 @@ async def resolve_learner_progress(_, info, programme_id: str) -> dict:
             f.course_id_fk,
             f.module_id,
             m.module_name,
-            ROUND(f.engagement_score_module_percentage, 2) as engagement,
-            ROUND(f.progress_percentage_module, 2) as progress,
-            ROUND(f.performance_score_module_percentage, 2) as performance,
-            f.is_badge_earned_module as badge,
-            f.earned_bonus_points_module as bonus_points,
-            f.time_spent_seconds_module,
-            f.achieved_points_module as achieved_points,
-            mo.module_total_points_defined as total_points,
-            CAST(mo.module_offering_start_timestamp AS STRING) as start_date
+            CAST(mo.module_offering_start_timestamp AS STRING) AS module_offering_start_timestamp,
+            CAST(mo.module_offering_end_timestamp AS STRING) AS module_offering_end_timestamp,
+            mo.module_total_points_defined,
+            mo.module_issue_badges_flag,
+            mo.module_badge_percentage,
+            mo.module_allowed_quiz_attempts,
+            mo.module_sla_ita_attendance_points,
+            mo.module_badge_bonus_points,
+            ROUND(COALESCE(f.engagement_score_module_percentage, 0), 2) as engagement,
+            ROUND(COALESCE(f.progress_percentage_module, 0), 2) as progress,
+            ROUND(COALESCE(f.performance_score_module_percentage, 0), 2) as performance,
+            COALESCE(f.is_badge_earned_module, false) as badge,
+            COALESCE(f.earned_bonus_points_module, 0) as bonus_points,
+            COALESCE(f.time_spent_seconds_module, 0) as time_spent_seconds_module,
+            COALESCE(f.achieved_points_module, 0) as achieved_points
         FROM `{project_id}.{dataset}.FactModulePerformanceSnapshot` f
         JOIN `{project_id}.{dataset}.DimModule` m
             ON f.module_id = m.module_id
         JOIN `{project_id}.{dataset}.DimModuleOffering` mo
             ON f.programme_id_fk = mo.programme_id_fk
             AND f.module_id = mo.module_id
+            AND f.cohort_identifier_fk = mo.cohort_schedule_id
         WHERE f.programme_id_fk = @programme_id
     ),
     LearnerCourses AS (
@@ -620,27 +785,42 @@ async def resolve_learner_progress(_, info, programme_id: str) -> dict:
             f.user_id,
             f.course_id,
             c.course_name,
-            ROUND(f.progress_percentage_course, 2) as progress,
-            ROUND(f.engagement_score_course_percentage, 2) as engagement,
-            ROUND(f.performance_score_course_percentage, 2) as performance,
-            f.is_certificate_earned_course as certificate_earned,
-            f.time_spent_seconds_course,
-            f.achieved_points_course as achieved_points,
-            co.course_total_points_defined as total_points,
-            CAST(co.course_offering_start_timestamp AS STRING) as start_date,
+            CAST(co.course_offering_start_timestamp AS STRING) AS course_offering_start_timestamp,
+            CAST(co.course_offering_end_timestamp AS STRING) AS course_offering_end_timestamp,
+            co.course_total_points_defined,
+            co.course_issue_badges_flag,
+            co.course_badge_percentage,
+            co.course_allowed_quiz_attempts,
+            co.course_badge_bonus_points,
+            co.course_sla_ita_attendance_points,
+            co.cohort_schedule_id,
+            co.certificate_pass_percentage,
+            co.total_badges,
+            ROUND(COALESCE(f.progress_percentage_course, 0), 2) as progress,
+            ROUND(COALESCE(f.engagement_score_course_percentage, 0), 2) as engagement,
+            ROUND(COALESCE(f.performance_score_course_percentage, 0), 2) as performance,
+            COALESCE(f.is_certificate_earned_course, false) as certificate_earned,
+            COALESCE(f.time_spent_seconds_course, 0) as time_spent_seconds_course,
+            COALESCE(f.achieved_points_course, 0) as achieved_points,
             ARRAY(
                 SELECT AS STRUCT
-                    module_id as id,
-                    module_name as name,
-                    engagement,
-                    progress,
-                    performance,
-                    badge,
-                    bonus_points,
-                    time_spent_seconds_module,
-                    achieved_points,
-                    total_points,
-                    start_date
+                    md.module_id,
+                    md.module_name,
+                    md.module_offering_start_timestamp,
+                    md.module_offering_end_timestamp,
+                    md.module_total_points_defined,
+                    md.module_issue_badges_flag,
+                    md.module_badge_percentage,
+                    md.module_allowed_quiz_attempts,
+                    md.module_sla_ita_attendance_points,
+                    md.module_badge_bonus_points,
+                    md.engagement,
+                    md.progress,
+                    md.performance,
+                    md.badge,
+                    md.bonus_points,
+                    md.time_spent_seconds_module,
+                    md.achieved_points
                 FROM ModuleData md
                 WHERE md.user_id = f.user_id
                 AND md.course_id_fk = f.course_id
@@ -651,6 +831,7 @@ async def resolve_learner_progress(_, info, programme_id: str) -> dict:
         JOIN `{project_id}.{dataset}.DimCourseOffering` co
             ON f.programme_id_fk = co.programme_id_fk
             AND f.course_id = co.course_id
+            AND f.cohort_identifier_fk = co.cohort_schedule_id
         WHERE f.programme_id_fk = @programme_id
     ),
     LearnerData AS (
@@ -659,28 +840,45 @@ async def resolve_learner_progress(_, info, programme_id: str) -> dict:
             u.first_name as name,
             u.email,
             f.learner_category as status,
-            ROUND(f.progress_percentage, 2) as progress,
-            ROUND(f.engagement_score_percentage, 2) as engagement,
-            ROUND(f.performance_score_percentage, 2) as performance,
-            f.time_spent_seconds,
-            f.achieved_points,
-            f.badges_earned_count as badges,
-            f.total_unlocked_course_points_in_programme as total_points,
+            ROUND(COALESCE(f.progress_percentage, 0), 2) as progress,
+            ROUND(COALESCE(f.engagement_score_percentage, 0), 2) as engagement,
+            ROUND(COALESCE(f.performance_score_percentage, 0), 2) as performance,
+            COALESCE(f.time_spent_seconds, 0) as time_spent_seconds,
+            COALESCE(f.achieved_points, 0) as achieved_points,
+            COALESCE(f.badges_earned_count, 0) as badges,
+            COALESCE(f.total_unlocked_course_points_in_programme, 0) as total_points,
             CASE WHEN f.completion_status = true THEN 1 ELSE 0 END as completion_certificate,
             CASE WHEN f.distinction_status = true THEN 1 ELSE 0 END as distinction_certificate,
+            (
+                SELECT COUNT(*)
+                FROM `{project_id}.{dataset}.FactCoursePerformanceSnapshot` fcps
+                WHERE fcps.programme_id_fk = @programme_id
+                AND fcps.user_id = f.user_id
+                AND fcps.is_certificate_earned_course = true
+            ) as course_certificates_earned,
+            CAST(f.last_active AS STRING) as last_active,
             ARRAY(
                 SELECT AS STRUCT
-                    course_id as id,
-                    course_name as name,
-                    progress,
-                    engagement,
-                    performance,
-                    certificate_earned,
-                    time_spent_seconds_course,
-                    achieved_points,
-                    total_points,
-                    start_date,
-                    modules
+                    lc.course_id,
+                    lc.course_name,
+                    lc.course_offering_start_timestamp,
+                    lc.course_offering_end_timestamp,
+                    lc.course_total_points_defined,
+                    lc.course_issue_badges_flag,
+                    lc.course_badge_percentage,
+                    lc.course_allowed_quiz_attempts,
+                    lc.course_badge_bonus_points,
+                    lc.course_sla_ita_attendance_points,
+                    lc.cohort_schedule_id,
+                    lc.certificate_pass_percentage,
+                    lc.total_badges,
+                    lc.progress,
+                    lc.engagement,
+                    lc.performance,
+                    lc.certificate_earned,
+                    lc.time_spent_seconds_course,
+                    lc.achieved_points,
+                    lc.modules
                 FROM LearnerCourses lc
                 WHERE lc.user_id = f.user_id
             ) as courses
@@ -697,48 +895,34 @@ async def resolve_learner_progress(_, info, programme_id: str) -> dict:
         COALESCE(pm.distinction_certificates, 0) as distinction_certificates,
         COALESCE(pm.performance, 0.0) as performance,
         COALESCE(pi.defined_total_course_certificates, 0) as total_course_certificates,
+        COALESCE(pi.total_badges, 0) as total_badges,
         ARRAY(
             SELECT AS STRUCT
-                user_id as id,
-                name,
-                email,
-                status,
-                progress,
-                engagement,
-                performance,
-                time_spent_seconds,
-                achieved_points,
-                badges,
-                total_points,
-                completion_certificate,
-                distinction_certificate,
-                courses
-            FROM LearnerData
+                ld.user_id as id,
+                ld.name,
+                ld.email,
+                ld.status,
+                ld.progress,
+                ld.engagement,
+                ld.performance,
+                ld.time_spent_seconds,
+                ld.achieved_points,
+                ld.badges,
+                ld.total_points,
+                STRUCT(
+                    ld.completion_certificate as completion,
+                    ld.distinction_certificate as distinction
+                ) as certificates,
+                ld.course_certificates_earned,
+                ld.last_active,
+                ld.courses
+            FROM LearnerData ld
         ) as learner_data
     FROM ProgrammeInfo pi
     LEFT JOIN PerformanceMetrics pm
         ON pi.programme_id = pm.programme_id
     """
 
-    def format_time_spent(seconds):
-        """Convert seconds to HH:MM:SS format"""
-        if not seconds:
-            return "00:00:00"
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        seconds = seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-    def format_date(date_str):
-        """Convert timestamp to DD MMM, YYYY format"""
-        if not date_str:
-            return None
-        try:
-            date = parser.parse(date_str)
-            return date.strftime("%d %b, %Y")
-        except (ValueError, TypeError):
-            return None
-    
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter("programme_id", "STRING", programme_id)
@@ -760,6 +944,7 @@ async def resolve_learner_progress(_, info, programme_id: str) -> dict:
                 "distinction_certificates": row_dict["distinction_certificates"],
                 "performance": row_dict["performance"],
                 "total_course_certificates": row_dict["total_course_certificates"],
+                "total_badges": row_dict["total_badges"],
                 "learner_data": [
                     {
                         "id": learner["id"],
@@ -773,26 +958,27 @@ async def resolve_learner_progress(_, info, programme_id: str) -> dict:
                         "achieved_points": learner["achieved_points"],
                         "badges": learner["badges"],
                         "total_points": learner["total_points"],
-                        "certificates": {
-                            "completion": learner["completion_certificate"],
-                            "distinction": learner["distinction_certificate"]
-                        },
+                        "certificates": learner["certificates"],
+                        "course_certificates_earned": learner["course_certificates_earned"],
+                        "last_active": format_date(learner["last_active"]),
                         "courses": [
                             {
-                                "id": course["id"],
-                                "name": course["name"],
+                                "id": course["course_id"],
+                                "name": course["course_name"],
                                 "progress": course["progress"],
                                 "engagement": course["engagement"],
                                 "performance": course["performance"],
                                 "certificate_earned": course["certificate_earned"],
                                 "time_spent": format_time_spent(course["time_spent_seconds_course"]),
                                 "achieved_points": course["achieved_points"],
-                                "total_points": course["total_points"],
-                                "start_date": format_date(course["start_date"]),
+                                "total_points": course["course_total_points_defined"],
+                                "total_badges": course["total_badges"],
+                                "certificate_pass_percentage": course["certificate_pass_percentage"],
+                                "start_date": format_date(course["course_offering_start_timestamp"]),
                                 "modules": [
                                     {
-                                        "id": module["id"],
-                                        "name": module["name"],
+                                        "id": module["module_id"],
+                                        "name": module["module_name"],
                                         "engagement": module["engagement"],
                                         "progress": module["progress"],
                                         "performance": module["performance"],
@@ -800,8 +986,8 @@ async def resolve_learner_progress(_, info, programme_id: str) -> dict:
                                         "bonus_points": module["bonus_points"],
                                         "time_spent": format_time_spent(module["time_spent_seconds_module"]),
                                         "achieved_points": module["achieved_points"],
-                                        "total_points": module["total_points"],
-                                        "start_date": format_date(module["start_date"])
+                                        "total_points": module["module_total_points_defined"],
+                                        "start_date": format_date(module["module_offering_start_timestamp"])
                                     }
                                     for module in course["modules"]
                                 ] if course["modules"] else []
