@@ -14,6 +14,13 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import threading
+from ariadne import ObjectType
+from ariadne.exceptions import HttpError
+from graphql import GraphQLError
+from ariadne.asgi import GraphQL
+from ariadne.asgi.handlers import GraphQLHTTPHandler
+from ariadne.types import Extension
+import functools
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -45,13 +52,13 @@ program_cache = {
 thread_pool = ThreadPoolExecutor(max_workers=4)
 
 def run_async(coro):
-    """Run a coroutine in a new event loop in the current thread"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    """Run a coroutine in the current thread's event loop or create a new one if none exists"""
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 async def process_module(module):
     """Process a single module asynchronously"""
@@ -527,6 +534,297 @@ def resolve_programs(_, info):
     
     return programs
 
+def async_to_sync(func):
+    """Convert an async function to sync function."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(func(*args, **kwargs))
+        except RuntimeError as e:
+            if "while another loop is running" in str(e):
+                # If we can't use the current loop, create a new one
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(func(*args, **kwargs))
+                finally:
+                    new_loop.close()
+            raise
+    return wrapper
+
+async def resolve_learner_progress(_, info, programme_id: str) -> dict:
+    """
+    Resolver for fetching learner progress data for a specific programme.
+    Args:
+        _: Parent object (not used)
+        info: GraphQL resolver info
+        programme_id: The programme ID to fetch progress for
+    Raises:
+        GraphQLError: If no data is found for the given programme_id
+    """
+    project_id = os.getenv('BIGQUERY_PROJECT_ID')
+    dataset = os.getenv('BIGQUERY_DATASET')
+    
+    query = f"""
+    WITH ProgrammeInfo AS (
+        SELECT 
+            p.programme_id,
+            p.programme_name,
+            po.offering_status,
+            po.defined_total_course_certificates
+        FROM `{project_id}.{dataset}.DimProgramme` p
+        LEFT JOIN `{project_id}.{dataset}.DimProgrammeOffering` po
+            ON p.programme_id = po.programme_id
+        WHERE p.programme_id = @programme_id
+    ),
+    PerformanceMetrics AS (
+        SELECT 
+            programme_id,
+            COUNT(CASE WHEN completion_status = true THEN 1 END) as completion_certificates,
+            COUNT(CASE WHEN distinction_status = true THEN 1 END) as distinction_certificates,
+            ROUND(AVG(performance_score_percentage), 2) as performance
+        FROM `{project_id}.{dataset}.FactProgrammePerformanceSnapshot`
+        WHERE programme_id = @programme_id
+        GROUP BY programme_id
+    ),
+    ModuleData AS (
+        SELECT 
+            f.user_id,
+            f.course_id_fk,
+            f.module_id,
+            m.module_name,
+            ROUND(f.engagement_score_module_percentage, 2) as engagement,
+            ROUND(f.progress_percentage_module, 2) as progress,
+            ROUND(f.performance_score_module_percentage, 2) as performance,
+            f.is_badge_earned_module as badge,
+            f.earned_bonus_points_module as bonus_points,
+            f.time_spent_seconds_module,
+            f.achieved_points_module as achieved_points,
+            mo.module_total_points_defined as total_points,
+            CAST(mo.module_offering_start_timestamp AS STRING) as start_date
+        FROM `{project_id}.{dataset}.FactModulePerformanceSnapshot` f
+        JOIN `{project_id}.{dataset}.DimModule` m
+            ON f.module_id = m.module_id
+        JOIN `{project_id}.{dataset}.DimModuleOffering` mo
+            ON f.programme_id_fk = mo.programme_id_fk
+            AND f.module_id = mo.module_id
+        WHERE f.programme_id_fk = @programme_id
+    ),
+    LearnerCourses AS (
+        SELECT 
+            f.user_id,
+            f.course_id,
+            c.course_name,
+            ROUND(f.progress_percentage_course, 2) as progress,
+            ROUND(f.engagement_score_course_percentage, 2) as engagement,
+            ROUND(f.performance_score_course_percentage, 2) as performance,
+            f.is_certificate_earned_course as certificate_earned,
+            f.time_spent_seconds_course,
+            f.achieved_points_course as achieved_points,
+            co.course_total_points_defined as total_points,
+            CAST(co.course_offering_start_timestamp AS STRING) as start_date,
+            ARRAY(
+                SELECT AS STRUCT
+                    module_id as id,
+                    module_name as name,
+                    engagement,
+                    progress,
+                    performance,
+                    badge,
+                    bonus_points,
+                    time_spent_seconds_module,
+                    achieved_points,
+                    total_points,
+                    start_date
+                FROM ModuleData md
+                WHERE md.user_id = f.user_id
+                AND md.course_id_fk = f.course_id
+            ) as modules
+        FROM `{project_id}.{dataset}.FactCoursePerformanceSnapshot` f
+        JOIN `{project_id}.{dataset}.DimCourse` c
+            ON f.course_id = c.course_id
+        JOIN `{project_id}.{dataset}.DimCourseOffering` co
+            ON f.programme_id_fk = co.programme_id_fk
+            AND f.course_id = co.course_id
+        WHERE f.programme_id_fk = @programme_id
+    ),
+    LearnerData AS (
+        SELECT 
+            f.user_id,
+            u.first_name as name,
+            u.email,
+            f.learner_category as status,
+            ROUND(f.progress_percentage, 2) as progress,
+            ROUND(f.engagement_score_percentage, 2) as engagement,
+            ROUND(f.performance_score_percentage, 2) as performance,
+            f.time_spent_seconds,
+            f.achieved_points,
+            f.badges_earned_count as badges,
+            f.total_unlocked_course_points_in_programme as total_points,
+            CASE WHEN f.completion_status = true THEN 1 ELSE 0 END as completion_certificate,
+            CASE WHEN f.distinction_status = true THEN 1 ELSE 0 END as distinction_certificate,
+            ARRAY(
+                SELECT AS STRUCT
+                    course_id as id,
+                    course_name as name,
+                    progress,
+                    engagement,
+                    performance,
+                    certificate_earned,
+                    time_spent_seconds_course,
+                    achieved_points,
+                    total_points,
+                    start_date,
+                    modules
+                FROM LearnerCourses lc
+                WHERE lc.user_id = f.user_id
+            ) as courses
+        FROM `{project_id}.{dataset}.FactProgrammePerformanceSnapshot` f
+        JOIN `{project_id}.{dataset}.DimUser` u
+            ON f.user_id = u.user_id
+        WHERE f.programme_id = @programme_id
+    )
+    SELECT 
+        pi.programme_id as id,
+        pi.programme_name as name,
+        pi.offering_status as status,
+        COALESCE(pm.completion_certificates, 0) as completion_certificates,
+        COALESCE(pm.distinction_certificates, 0) as distinction_certificates,
+        COALESCE(pm.performance, 0.0) as performance,
+        COALESCE(pi.defined_total_course_certificates, 0) as total_course_certificates,
+        ARRAY(
+            SELECT AS STRUCT
+                user_id as id,
+                name,
+                email,
+                status,
+                progress,
+                engagement,
+                performance,
+                time_spent_seconds,
+                achieved_points,
+                badges,
+                total_points,
+                completion_certificate,
+                distinction_certificate,
+                courses
+            FROM LearnerData
+        ) as learner_data
+    FROM ProgrammeInfo pi
+    LEFT JOIN PerformanceMetrics pm
+        ON pi.programme_id = pm.programme_id
+    """
+
+    def format_time_spent(seconds):
+        """Convert seconds to HH:MM:SS format"""
+        if not seconds:
+            return "00:00:00"
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        seconds = seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def format_date(date_str):
+        """Convert timestamp to DD MMM, YYYY format"""
+        if not date_str:
+            return None
+        try:
+            date = parser.parse(date_str)
+            return date.strftime("%d %b, %Y")
+        except (ValueError, TypeError):
+            return None
+    
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("programme_id", "STRING", programme_id)
+        ]
+    )
+
+    try:
+        query_job = bq_client.query(query, job_config=job_config)
+        results = query_job.result()
+        
+        row = next(iter(results), None)
+        if row:
+            row_dict = dict(row.items())
+            return {
+                "id": row_dict["id"],
+                "name": row_dict["name"],
+                "status": row_dict["status"],
+                "completion_certificates": row_dict["completion_certificates"],
+                "distinction_certificates": row_dict["distinction_certificates"],
+                "performance": row_dict["performance"],
+                "total_course_certificates": row_dict["total_course_certificates"],
+                "learner_data": [
+                    {
+                        "id": learner["id"],
+                        "name": learner["name"],
+                        "email": learner["email"],
+                        "status": learner["status"],
+                        "progress": learner["progress"],
+                        "engagement": learner["engagement"],
+                        "performance": learner["performance"],
+                        "time_spent": format_time_spent(learner["time_spent_seconds"]),
+                        "achieved_points": learner["achieved_points"],
+                        "badges": learner["badges"],
+                        "total_points": learner["total_points"],
+                        "certificates": {
+                            "completion": learner["completion_certificate"],
+                            "distinction": learner["distinction_certificate"]
+                        },
+                        "courses": [
+                            {
+                                "id": course["id"],
+                                "name": course["name"],
+                                "progress": course["progress"],
+                                "engagement": course["engagement"],
+                                "performance": course["performance"],
+                                "certificate_earned": course["certificate_earned"],
+                                "time_spent": format_time_spent(course["time_spent_seconds_course"]),
+                                "achieved_points": course["achieved_points"],
+                                "total_points": course["total_points"],
+                                "start_date": format_date(course["start_date"]),
+                                "modules": [
+                                    {
+                                        "id": module["id"],
+                                        "name": module["name"],
+                                        "engagement": module["engagement"],
+                                        "progress": module["progress"],
+                                        "performance": module["performance"],
+                                        "badge": module["badge"],
+                                        "bonus_points": module["bonus_points"],
+                                        "time_spent": format_time_spent(module["time_spent_seconds_module"]),
+                                        "achieved_points": module["achieved_points"],
+                                        "total_points": module["total_points"],
+                                        "start_date": format_date(module["start_date"])
+                                    }
+                                    for module in course["modules"]
+                                ] if course["modules"] else []
+                            }
+                            for course in learner["courses"]
+                        ] if learner["courses"] else []
+                    }
+                    for learner in row_dict["learner_data"]
+                ] if row_dict["learner_data"] else []
+            }
+        return None
+
+    except Exception as e:
+        logger.error(f"Error in resolve_learner_progress: {str(e)}")
+        raise GraphQLError(f"Error fetching learner progress data: {str(e)}")
+
+# Create a sync version of the async resolver
+sync_resolve_learner_progress = async_to_sync(resolve_learner_progress)
+
+# Bind resolvers to query type
+query.set_field("programs", resolve_programs)
+query.set_field("learnerProgress", sync_resolve_learner_progress)
+
 # Make the schema executable
 schema = make_executable_schema(type_defs, query)
 
@@ -538,7 +836,12 @@ def graphql_playground():
 @app.route("/graphql", methods=["POST"])
 def graphql_server():
     data = request.get_json()
-    success, result = graphql_sync(schema, data, context_value=request, debug=True)
+    success, result = graphql_sync(
+        schema,
+        data,
+        context_value=request,
+        debug=True
+    )
     status_code = 200 if success else 400
     return jsonify(result), status_code
 

@@ -6,32 +6,31 @@ type Duration {
 }
 
 type Module {
-  module_id: String
-  module_name: String
-  cohort_schedule_id: String
-  start_date: String
-  end_date: String
-  module_total_points: Int
-  issue_badges: Boolean
-  badge_percentage: Float
-  allowed_quiz_attempts: Int
-  sla_ita_attendance_points: Int
-  badge_bonus_points: Int
+  id: String!
+  name: String!
+  engagement: Float!
+  progress: Float!
+  performance: Float!
+  badge: Boolean!
+  bonus_points: Int!
+  time_spent: String!
+  achieved_points: Int!
+  total_points: Int!
+  start_date: String!
 }
 
 type Course {
-  course_id: String
-  course_name: String
-  start_date: String
-  end_date: String
-  course_total_points: Int
-  issue_badges: Boolean
-  badge_percentage: Float
-  allowed_quiz_attempts: Int
-  badge_bonus_points: Int
-  sla_ita_attendance_points: Int
-  cohort_schedule_id: String
-  modules: [Module]
+  id: String!
+  name: String!
+  progress: Float!
+  engagement: Float!
+  performance: Float!
+  certificate_earned: Boolean!
+  time_spent: String!
+  achieved_points: Int!
+  total_points: Int!
+  start_date: String!
+  modules: [Module!]!
 }
 
 type Pacing {
@@ -89,6 +88,39 @@ type Program {
   engagement: Float
 }
 
+type Certificates {
+    completion: Int!
+    distinction: Int!
+}
+
+type Learner {
+    id: String!
+    name: String!
+    email: String!
+    status: String!
+    progress: Float!
+    engagement: Float!
+    performance: Float!
+    time_spent: String!
+    achieved_points: Int!
+    badges: Int!
+    total_points: Int!
+    certificates: Certificates!
+    courses: [Course!]!
+}
+
+type LearnerProgress {
+    id: String!
+    name: String!
+    status: String!
+    completion_certificates: Int!
+    distinction_certificates: Int!
+    performance: Float!
+    total_course_certificates: Int!
+    learner_data: [Learner!]!
+}
+
 type Query {
-  programs: [Program]
+  programs: [Program!]!
+  learnerProgress(programme_id: String!): LearnerProgress
 }
